@@ -10,12 +10,22 @@
     "activeTab",
     "scripting",
     "sidePanel",
-    "webNavigation"
+    "webNavigation",
+    "tabs"
   ],
 
   "host_permissions": [
     "<all_urls>"
   ],
+
+  "externally_connectable": {
+    "matches": [
+      "https://a11ymonk.com/*",
+      "https://provea11y.com/*",
+      "http://127.0.0.1:4174/*",
+      "http://localhost:4174/*"
+    ]
+  },
 
   "icons": {
     "16": "images/icon-16.png",
