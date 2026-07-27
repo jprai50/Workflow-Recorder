@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "A11Y Monk Workflow Recorder",
-  "version": "1.1.0",
+  "version": "1.2.0",
 
-  "description": "Captures end-to-end user workflows and generates reusable YAML scripts for accessibility audits.",
+  "description": "Audit website accessibility: record user workflows as YAML and run axe-core WCAG scans on any page.",
 
   "permissions": [
     "storage",
