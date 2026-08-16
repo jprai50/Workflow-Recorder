@@ -1,5 +1,5 @@
 {
-  "manifest_version": 4,
+  "manifest_version": 3,
   "name": "ProveA11y Accessibility Workflow Recorder",
   "version": "1.4.0",
 
