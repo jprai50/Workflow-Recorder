@@ -1,9 +1,10 @@
 {
-  "manifest_version": 3,
-  "name": "A11Y Monk Workflow Recorder",
-  "version": "1.3.0",
+  "manifest_version": 4,
+  "name": "ProveA11y Accessibility Workflow Recorder",
+  "version": "1.4.0",
 
-  "description": "Audit website accessibility: record user workflows as YAML and run axe-core WCAG scans on any page.",
+  "description": "Record website workflows as YAML and run axe-core WCAG accessibility scans, saving results to your provea11y account.",
+
   "permissions": [
     "storage",
     "activeTab",
@@ -19,8 +20,8 @@
 
   "externally_connectable": {
     "matches": [
-      "https://provea11y.com/*",
-      "https://a11ymonk.com/*",
+      "https://*.provea11y.com/*",
+      "https://*.a11ymonk.com/*",
       "http://127.0.0.1:4174/*",
       "http://localhost:4174/*"
     ]
@@ -33,7 +34,7 @@
   },
 
   "action": {
-    "default_title": "Open A11Y Monk Workflow Recorder",
+    "default_title": "Open ProveA11y Workflow Recorder",
     "default_icon": {
       "16": "images/icon-16.png",
       "48": "images/icon-48.png",

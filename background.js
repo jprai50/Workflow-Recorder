@@ -75,7 +75,7 @@ chrome.runtime.onStartup.addListener(() => {
 function log(message, data = null) {
 
   console.log(
-    "[A11Y Monk Recorder]",
+    "[ProveA11y Recorder]",
     message,
     data || ""
   );
@@ -146,7 +146,7 @@ log(
       if (chrome.runtime.lastError) {
 
         console.warn(
-          "[A11Y Monk Recorder]",
+          "[ProveA11y Recorder]",
           chrome.runtime.lastError.message
         );
 
@@ -189,7 +189,7 @@ chrome.runtime.onMessage.addListener((request) => {
 // -----------------------------------------------------------------------------
 // APP-DRIVEN ACCESSIBILITY SCAN (externally connectable)
 // -----------------------------------------------------------------------------
-// The A11y Monk web app (see externally_connectable in manifest) opens a port and
+// The ProveA11y web app (see externally_connectable in manifest) opens a port and
 // asks us to scan a page tab it has open. We foreground that tab, run the shared
 // scan flow with screenshots, stream progress back, then return focus to the app.
 

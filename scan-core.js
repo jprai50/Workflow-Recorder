@@ -8,9 +8,23 @@
 (function () {
   const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"];
   const MAX_SHOTS = 100;
+  // Separator joining axe's frame-chain target into one selector string
+  // ("iframe[title=x] >>> button"). Kept in sync with the bookmarklet runner.
+  const FRAME_SEP = " >>> ";
 
   // ---- Functions injected into the target page (must be self-contained) -------
-  function axeInPage(tags, selector, exclude) {
+
+  // Let axe talk to its copies in cross-origin frames. Injected into EVERY frame;
+  // without it axe merges same-origin frames only and an embed's issues are
+  // silently missing (which is how a page could report 0 issues while axe
+  // DevTools — which does inject everywhere — reported plenty).
+  // This runs in the extension's isolated world, so `window.axe` is not reachable
+  // by the page's own scripts and the relaxed origin list is not exposed to them.
+  function allowCrossOriginFrames() {
+    try { window.axe.configure({ allowedOrigins: ["<unsafe_all_origins>"] }); } catch (e) {}
+  }
+
+  function axeInPage(tags, selector, exclude, frameSep) {
     let ctx = document;
     if (selector) {
       let el = null; try { el = document.querySelector(selector); } catch (e) {}
@@ -28,9 +42,14 @@
       const issues = [];
       (r.violations || []).forEach((v) => {
         (v.nodes || []).forEach((n) => {
+          // For a node inside an iframe axe returns a FRAME CHAIN — ["iframe#x",
+          // "button"] — so target[0] is the iframe, not the offending element.
+          // Join the whole chain; a top-frame node is a 1-element array and joins
+          // to itself, so nothing changes for frame-free pages.
+          const chain = Array.isArray(n.target) ? n.target.map(String) : [];
           issues.push({
             rule: v.id, impact: v.impact,
-            selector: (n.target && n.target[0]) ? String(n.target[0]) : "",
+            selector: chain.join(frameSep),
             help: v.help || "", helpUrl: v.helpUrl || "",
             failureSummary: n.failureSummary || "", elementHtml: n.html || "",
           });
@@ -40,26 +59,62 @@
     }).catch((e) => ({ __error: String((e && e.message) || e) }));
   }
 
-  function highlightAndRect(sel) {
+  // `highlight` false = measure only (used on the parent hop, where we want the
+  // iframe's position but not a red outline around the whole embed).
+  function highlightAndRect(sel, highlight) {
     document.querySelectorAll("[data-a11ymonk-hl]").forEach((el) => {
       el.style.removeProperty("outline"); el.style.removeProperty("outline-offset"); el.style.removeProperty("box-shadow");
       el.removeAttribute("data-a11ymonk-hl");
     });
     let el = null; try { el = document.querySelector(sel); } catch (e) {}
     if (!el) return null;
-    el.style.setProperty("outline", "4px solid #ff3b30", "important");
-    el.style.setProperty("outline-offset", "2px", "important");
-    el.style.setProperty("box-shadow", "0 0 0 6px rgba(255,59,48,.35)", "important");
-    el.setAttribute("data-a11ymonk-hl", "true");
+    if (highlight !== false) {
+      el.style.setProperty("outline", "4px solid #ff3b30", "important");
+      el.style.setProperty("outline-offset", "2px", "important");
+      el.style.setProperty("box-shadow", "0 0 0 6px rgba(255,59,48,.35)", "important");
+      el.setAttribute("data-a11ymonk-hl", "true");
+    }
     el.scrollIntoView({ block: "center", inline: "center" });
     const r = el.getBoundingClientRect();
     // Report the progress pill's on-screen bottom so the crop can clip its band out of
     // the screenshot (instead of hiding it per shot, which flickers). The pill is fixed
     // at the top of the viewport; its rect is viewport-relative, matching the capture.
+    // It only exists in the TOP frame, so an in-frame call returns 0 and the caller
+    // substitutes the top frame's value.
     var pill = document.getElementById("a11ymonk-progress-pill");
     var pillBottom = 0;
     if (pill) { try { var pr = pill.getBoundingClientRect(); if (pr && pr.width) pillBottom = pr.bottom; } catch (e) {} }
     return { x: r.left, y: r.top, w: r.width, h: r.height, dpr: window.devicePixelRatio || 1, pillBottom: pillBottom };
+  }
+
+  // Resolve the frameId of an <iframe> in the top document, so the element inside
+  // it can be measured in its own frame. Matches on the frame's full URL — the
+  // recorder's older helper matches on origin alone, which picks the wrong frame
+  // when a page embeds two documents from the same host. Falls back to position
+  // among same-URL frames, then to any same-origin frame.
+  async function frameIdForIframe(tabId, iframeSel) {
+    const info = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (sel) => {
+        let el = null; try { el = document.querySelector(sel); } catch (e) {}
+        if (!el) return null;
+        const all = [...document.querySelectorAll("iframe")];
+        const same = all.filter((f) => f.src === el.src);
+        return { src: el.src || "", indexAmongSameSrc: same.indexOf(el) };
+      },
+      args: [iframeSel],
+    }).then((r) => r && r[0] && r[0].result).catch(() => null);
+    if (!info || !info.src) return null;
+
+    const frames = await new Promise((res) => {
+      try { chrome.webNavigation.getAllFrames({ tabId }, (f) => res(f || [])); } catch (e) { res([]); }
+    });
+    const exact = frames.filter((f) => f.url === info.src);
+    if (exact.length) return (exact[info.indexAmongSameSrc] || exact[0]).frameId;
+    let origin = ""; try { origin = new URL(info.src).origin; } catch (e) {}
+    if (!origin) return null;
+    const byOrigin = frames.filter((f) => { try { return new URL(f.url).origin === origin; } catch (e) { return false; } });
+    return byOrigin.length ? byOrigin[0].frameId : null;
   }
 
   function clearHighlights() {
@@ -112,7 +167,7 @@
         "min-width:220px;max-width:90vw;text-align:center;display:flex;flex-direction:column;gap:6px";
       pill.innerHTML =
         '<div style="display:flex;align-items:center;justify-content:center;gap:6px">' +
-          '<span>⚡ A11y Monk</span><span id="a11ymonk-pill-label" style="opacity:.85;font-weight:500"></span>' +
+          '<span>⚡ ProveA11y</span><span id="a11ymonk-pill-label" style="opacity:.85;font-weight:500"></span>' +
         '</div>' +
         '<div style="height:6px;background:rgba(255,255,255,.22);border-radius:999px;overflow:hidden">' +
           '<div id="a11ymonk-pill-fill" style="height:100%;width:0%;background:#a5b4fc;border-radius:999px' +
@@ -147,6 +202,48 @@
 
   // deps: { api, token, tabId, windowId, url, screenshots,
   //         cropDataUrlToBlob(dataUrl, rect) -> Promise<Blob|null>, onStatus(obj) }
+  // Locate an issue's element and return a rect in TOP-viewport CSS pixels, which
+  // is the coordinate space captureVisibleTab produces and cropRect expects.
+  //
+  // A top-frame selector is one hop. A frame-chain selector needs two, because an
+  // element inside an iframe measures against ITS OWN viewport: measure the iframe
+  // in the top document, measure the element inside the frame, then add the two
+  // origins. Only a single hop is supported — for a deeper chain (or a frame we
+  // cannot resolve) we fall back to outlining the outermost iframe, so the
+  // evidence still shows where the issue lives instead of being dropped.
+  async function rectForSelector(tabId, selector) {
+    const chain = String(selector).split(FRAME_SEP);
+    const one = async (sel, highlight, frameId) => chrome.scripting.executeScript({
+      target: frameId != null ? { tabId, frameIds: [frameId] } : { tabId },
+      func: highlightAndRect,
+      args: [sel, highlight !== false],
+    }).then((r) => r && r[0] && r[0].result).catch(() => null);
+
+    if (chain.length === 1) return one(chain[0], true);
+
+    // Hop 1 — the iframe itself, in the top document. Scrolls it into view (an
+    // element scrolled into view *inside* the frame is still useless if the frame
+    // is off-screen) and gives us both the offset and the real pillBottom.
+    const frameRect = await one(chain[0], false);
+    if (!frameRect) return null;
+    const outer = { x: frameRect.x, y: frameRect.y, w: frameRect.w, h: frameRect.h, dpr: frameRect.dpr, pillBottom: frameRect.pillBottom };
+    if (chain.length > 2) return outer;
+
+    const frameId = await frameIdForIframe(tabId, chain[0]);
+    if (frameId == null) return outer;
+
+    // Hop 2 — the element, measured in its own frame.
+    const elRect = await one(chain[1], true, frameId);
+    if (!elRect) return outer;
+    return {
+      x: frameRect.x + elRect.x,
+      y: frameRect.y + elRect.y,
+      w: elRect.w, h: elRect.h,
+      dpr: frameRect.dpr || elRect.dpr || 1,
+      pillBottom: frameRect.pillBottom,
+    };
+  }
+
   async function runScanFlow(deps) {
     const { api, token, tabId, windowId, url, screenshots, cropDataUrlToBlob } = deps;
     const onStatus = deps.onStatus || function () {};
@@ -168,11 +265,18 @@
       if (!cr.ok || !cfg.ok) throw new Error((cfg && cfg.error) || ("HTTP " + cr.status));
 
       onStatus({ phase: "inject", text: "Injecting scanner…", label: cfg.label, kind: cfg.kind });
-      await chrome.scripting.executeScript({ target: { tabId }, files: ["vendor/axe.min.js"] });
+      // Inject into EVERY frame, then let each copy talk to the others. axe then
+      // merges sub-frame results into the single top-frame run below, reporting
+      // in-frame nodes as a frame chain — the same coverage axe DevTools has.
+      // A frame that can't be injected (sandboxed, already detached) just fails
+      // its own injection; allFrames does not reject the whole call.
+      await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["vendor/axe.min.js"] });
+      await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: allowCrossOriginFrames }).catch(function () {});
 
       onStatus({ phase: "scan", text: "Scanning the page…" });
       updateProgress(15, "Scanning the page");
-      const res = await chrome.scripting.executeScript({ target: { tabId }, func: axeInPage, args: [WCAG_TAGS, cfg.selector || "", cfg.exclude || []] });
+      // Top frame only: axe pulls in every frame it can reach itself.
+      const res = await chrome.scripting.executeScript({ target: { tabId }, func: axeInPage, args: [WCAG_TAGS, cfg.selector || "", cfg.exclude || [], FRAME_SEP] });
       let issues = res && res[0] && res[0].result;
       if (issues && issues.__error) throw new Error("axe error: " + issues.__error);
       if (!Array.isArray(issues)) issues = [];
@@ -193,8 +297,7 @@
           onStatus({ phase: "shots", text: "Capturing screenshots " + (i + 1) + "/" + limit + "…", done: i + 1, total: limit });
           if (!issues[i].selector) continue;
           try {
-            const rr = await chrome.scripting.executeScript({ target: { tabId }, func: highlightAndRect, args: [issues[i].selector] });
-            const rect = rr && rr[0] && rr[0].result;
+            const rect = await rectForSelector(tabId, issues[i].selector);
             if (!rect) continue;
             await delay(250);
             const shot = await captureVisible(windowId);
@@ -207,7 +310,8 @@
           } catch (e) { /* skip this shot */ }
           await delay(500);
         }
-        try { await chrome.scripting.executeScript({ target: { tabId }, func: clearHighlights }); } catch (e) {}
+        // allFrames: an in-frame element was outlined inside its own document.
+        try { await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: clearHighlights }); } catch (e) {}
       }
 
       onStatus({ phase: "ingest", text: "Saving results…" });
